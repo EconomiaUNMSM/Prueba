@@ -1,4 +1,5 @@
 # Importar Librerías
+import os
 import pandas as pd
 import threading
 import time
@@ -37,24 +38,32 @@ threading.Thread(target=IB_conexion.run).start()
 time.sleep(1)
 
 # Solicitud de Datos Disponibles.
-
 def extraer_datos_ibkr_1d(years, IB_conexion, contrato):
     """
-    Extrae datos históricos diarios (1 día por barra) para un contrato dado usando IBKR.
-    
+    Extrae datos históricos diarios (1 día por barra) para un contrato usando IBKR.
+    Si el archivo CSV ya existe, agrega nuevos datos sin duplicar.
+
     Parámetros:
-      - years (int): Número de años de datos a extraer.
-      - IB_conexion: Objeto de conexión a IB.
+      - years (int): Años de datos a extraer.
+      - IB_conexion: Objeto de conexión a IBKR.
       - contrato: Objeto de contrato configurado.
 
     Retorna:
-      - df_final (DataFrame) con las columnas: Open, High, Low, Close, Volume.
+      - DataFrame con columnas: Open, High, Low, Close, Volume.
     """
-    
+
     total_iter = years
     end_date = ""
     dataframes = []
     errores_seguidos = 0
+    archivo_csv = f"{contrato.symbol}_1d.csv"
+
+    # Cargar datos previos si el archivo existe
+    if os.path.exists(archivo_csv):
+        df_existente = pd.read_csv(archivo_csv, parse_dates=["Date"], index_col="Date")
+        print(f"📂 Archivo existente encontrado: {archivo_csv} ({len(df_existente)} filas)")
+    else:
+        df_existente = pd.DataFrame()
 
     for i in range(total_iter):
         print(f"\n📡 Solicitud {i+1}/{total_iter} → End Date: {end_date or 'Actual'}")
@@ -87,33 +96,30 @@ def extraer_datos_ibkr_1d(years, IB_conexion, contrato):
         
         df_temp = pd.DataFrame(IB_conexion.datos)
         
-        if not df_temp.empty and (len(dataframes) == 0 or df_temp["Date"].max() < dataframes[-1]["Date"].min()):
+        if not df_temp.empty:
+            df_temp["Date"] = pd.to_datetime(df_temp["Date"])
             dataframes.append(df_temp)
             print(f"📊 Datos agregados hasta: {df_temp['Date'].min()}")
-        
-        end_date = pd.to_datetime(df_temp["Date"].min()).strftime("%Y%m%d %H:%M:%S")
+
+        end_date = df_temp["Date"].min().strftime("%Y%m%d %H:%M:%S")
         errores_seguidos = 0
         time.sleep(1)
-    
+
     if dataframes:
-        df_final = pd.concat(dataframes).drop_duplicates().reset_index(drop=True)
+        df_nuevo = pd.concat(dataframes).drop_duplicates().reset_index(drop=True)
+        df_nuevo.set_index("Date", inplace=True)
 
-        # Convertir 'Date' a datetime y establecer como índice
-        df_final.rename(columns={'Date': 'Date'}, inplace=True)  # Asegurar que la columna se llama 'Date'
-        df_final['Date'] = pd.to_datetime(df_final['Date'])
-        df_final.set_index('Date', inplace=True)
+        columnas_deseadas = ["Open", "High", "Low", "Close", "Volume"]
+        df_nuevo = df_nuevo[columnas_deseadas]
 
-        # Mantener solo las columnas deseadas
-        columnas_deseadas = ['Open', 'High', 'Low', 'Close', 'Volume']
-        df_final = df_final[columnas_deseadas]
+        # Si ya existe el archivo, fusionar datos y sobrescribir solo registros duplicados
+        if not df_existente.empty:
+            df_final = pd.concat([df_existente, df_nuevo]).drop_duplicates().sort_index()
+        else:
+            df_final = df_nuevo
 
-        # Ordenar de menor a mayor fecha
-        df_final.sort_index(inplace=True)
-
-        # Guardar en CSV manteniendo el índice
-        df_final.to_csv(f"{contrato.symbol}_1d.csv")
-
-        print(f"\n✅ Datos almacenados correctamente en {contrato.symbol}_1d.csv")
+        df_final.to_csv(archivo_csv, index=True)
+        print(f"\n✅ Datos actualizados y guardados en {archivo_csv}")
         print(df_final.head())
 
         return df_final
@@ -123,38 +129,28 @@ def extraer_datos_ibkr_1d(years, IB_conexion, contrato):
 
 def extraer_datos_ibkr_1h(years, IB_conexion, contrato):
     """
-    Extrae datos históricos de 1 hora para un contrato dado usando IBKR.
-    
-    La función realiza una iteración por cada año a extraer (según el parámetro 'years')
-    y utiliza la función reqHistoricalData de la conexión IB (IB_conexion). Cada iteración
-    descarga datos del período de 1 año, actualizando el endDate para retroceder en el tiempo.
-    
-    Parámetros:
-      - years (int): Número de años de datos a extraer.
-      - IB_conexion: Objeto de conexión a IB que debe tener los atributos 'datos' (lista) y 
-                     'event' (un threading.Event()) y el método reqHistoricalData().
-      - contrato: Objeto de contrato configurado (por ejemplo, con atributos symbol, secType, exchange, currency).
-    
-    Retorna:
-      - df_final (DataFrame): DataFrame con índice "Date" y columnas: Open, High, Low, Close, Volume,
-        o None si no se pudieron obtener datos.
+    Extrae datos históricos de 1 hora para un contrato usando IBKR y los guarda en CSV.
+    Si el archivo ya existe, agrega los datos nuevos y elimina duplicados basándose en la fecha.
     """
-    
-    # Variables iniciales
-    end_date = ""  # Al estar vacío, IB descarga desde la fecha actual
-    total_iter = years  # Se realizará una iteración por cada año
+    end_date = ""  # IB descarga desde la fecha actual si está vacío
+    total_iter = years  # Iteraciones de 1 año cada una
     dataframes = []
-    errores_seguidos = 0  # Contador de intentos fallidos
-    
-    # Bucle para descargar datos en fragmentos de 1 año hacia atrás
+    errores_seguidos = 0
+    archivo_csv = f"{contrato.symbol}_1h.csv"
+
+    # Cargar datos previos si el archivo existe
+    if os.path.exists(archivo_csv):
+        df_existente = pd.read_csv(archivo_csv, parse_dates=["Date"], index_col="Date")
+        print(f"📂 Archivo existente encontrado: {archivo_csv} ({len(df_existente)} filas)")
+    else:
+        df_existente = pd.DataFrame()
+
     for i in range(total_iter):
         print(f"\n📡 Solicitud {i+1}/{total_iter} → End Date: {end_date or 'Actual'}")
         
-        # Limpiar datos previos y resetear evento
         IB_conexion.datos.clear()
         IB_conexion.event.clear()
         
-        # Solicitar datos históricos de 1 año, con velas de 1 hora
         IB_conexion.reqHistoricalData(
             reqId=1,
             contract=contrato,
@@ -168,10 +164,8 @@ def extraer_datos_ibkr_1h(years, IB_conexion, contrato):
             chartOptions=[]
         )
         
-        # Esperar la respuesta (hasta 10 segundos)
         IB_conexion.event.wait(timeout=10)
         
-        # Si no se recibieron datos, contabilizar error y, en caso de 3 fallos consecutivos, salir
         if not IB_conexion.datos:
             print("⚠️ No se recibieron datos, terminando intento...")
             errores_seguidos += 1
@@ -180,83 +174,69 @@ def extraer_datos_ibkr_1h(years, IB_conexion, contrato):
                 break
             continue
         
-        # Convertir los datos recibidos a DataFrame
         df_temp = pd.DataFrame(IB_conexion.datos)
         
-        # Si el DataFrame no está vacío y no es duplicado, lo agregamos
-        if not df_temp.empty and (len(dataframes) == 0 or df_temp["Date"].max() < dataframes[-1]["Date"].min()):
+        if not df_temp.empty:
+            df_temp["Date"] = pd.to_datetime(df_temp["Date"])
             dataframes.append(df_temp)
             print(f"📊 Datos agregados hasta: {df_temp['Date'].min()}")
         
-        # Actualizar end_date para la siguiente iteración (se usa la fecha mínima del DataFrame)
-        end_date = pd.to_datetime(df_temp["Date"].min()).strftime("%Y%m%d %H:%M:%S")
-        
-        # Resetear contador de errores y esperar un segundo para evitar bloqueos
+        end_date = df_temp["Date"].min().strftime("%Y%m%d %H:%M:%S")
         errores_seguidos = 0
         time.sleep(1)
-    
+
     if dataframes:
-        # Unir todos los DataFrames descargados y eliminar duplicados
-        df_final = pd.concat(dataframes).drop_duplicates().reset_index(drop=True)
+        df_nuevo = pd.concat(dataframes).drop_duplicates().reset_index(drop=True)
+        df_nuevo.set_index("Date", inplace=True)
         
-        # Convertir 'Date' a datetime, ordenar y establecerla como índice
-        df_final['Date'] = pd.to_datetime(df_final['Date'])
-        df_final.sort_values(by='Date', inplace=True)
-        df_final.set_index('Date', inplace=True)
-        
-        # Mantener solo las columnas deseadas en el orden correcto
-        columnas_deseadas = ['Open', 'High', 'Low', 'Close', 'Volume']
-        df_final = df_final[columnas_deseadas]
-        
-        # Guardar en CSV manteniendo el índice (que es 'Date')
-        df_final.to_csv(f"{contrato.symbol}_1h.csv")
-        print(f"\n✅ Datos almacenados correctamente en {contrato.symbol}_1h.csv")
+        columnas_deseadas = ["Open", "High", "Low", "Close", "Volume"]
+        df_nuevo = df_nuevo[columnas_deseadas]
+
+        # Si ya existe el archivo, fusionar datos y sobrescribir solo registros duplicados
+        if not df_existente.empty:
+            df_final = pd.concat([df_existente, df_nuevo]).drop_duplicates().sort_index()
+        else:
+            df_final = df_nuevo
+
+        df_final.to_csv(archivo_csv, index=True)
+        print(f"\n✅ Datos actualizados y guardados en {archivo_csv}")
         print(df_final.head())
-        
+
         return df_final
     else:
         print("❌ No se descargaron datos.")
-        return None   
+        return None
 
 def extraer_datos_ibkr_5m(years, IB_conexion, contrato):
     """
-    Extrae datos históricos de 5 minutos para un contrato dado usando IBKR.
-    
-    La función realiza iteraciones mensuales para cubrir el rango total de 'years' años.
-    Cada iteración descarga datos de 1 mes (durationStr="1 M") con velas de 5 minutos
-    (barSizeSetting="5 mins"). Se utiliza la lógica de actualización de la fecha final
-    (end_date) para avanzar hacia atrás en el tiempo, evitando duplicados y controlando errores.
-    
-    Parámetros:
-      - years (int): Número de años de datos a extraer.
-      - IB_conexion: Objeto de conexión a IB que debe tener los atributos 'datos' (lista) y 
-                     'event' (un threading.Event()) y el método reqHistoricalData().
-      - contrato: Objeto de contrato configurado (por ejemplo, con atributos symbol, secType, exchange, currency).
-    
-    Retorna:
-      - df_final (DataFrame): DataFrame con índice "Date" y columnas: Open, High, Low, Close, Volume,
-        o None si no se pudieron obtener datos.
+    Extrae datos históricos de 5 minutos para un contrato usando IBKR y los guarda en CSV.
+    Si el archivo ya existe, agrega los datos nuevos y elimina duplicados basándose en la fecha.
     """
-    
-    total_iter = years * 12   # Iteraciones mensuales (por ejemplo, 10 años → 120 iteraciones)
-    end_date = ""             # Vacío: IB descarga hasta la fecha actual
+    total_iter = years * 12  # Iteraciones mensuales
+    end_date = ""  # Vacío: IB descarga hasta la fecha actual
     dataframes = []
     errores_seguidos = 0
-    
+    archivo_csv = f"{contrato.symbol}_5m.csv"
+
+    # Cargar datos previos si el archivo existe
+    if os.path.exists(archivo_csv):
+        df_existente = pd.read_csv(archivo_csv, parse_dates=["Date"], index_col="Date")
+        print(f"📂 Archivo existente encontrado: {archivo_csv} ({len(df_existente)} filas)")
+    else:
+        df_existente = pd.DataFrame()
+
     for i in range(total_iter):
         print(f"\n📡 Solicitud {i+1}/{total_iter} → End Date: {end_date or 'Actual'}")
         
-        # Limpiar datos previos y resetear el evento
         IB_conexion.datos.clear()
         IB_conexion.event.clear()
         
-        # Solicitar datos históricos de 1 mes con velas de 5 minutos
         IB_conexion.reqHistoricalData(
             reqId=1,
             contract=contrato,
             endDateTime=end_date,
-            durationStr="1 M",          # 1 Mes por solicitud
-            barSizeSetting="5 mins",    # Intervalos de 5 minutos
+            durationStr="1 M",
+            barSizeSetting="5 mins",
             whatToShow="TRADES",
             useRTH=1,
             formatDate=1,
@@ -264,7 +244,6 @@ def extraer_datos_ibkr_5m(years, IB_conexion, contrato):
             chartOptions=[]
         )
         
-        # Esperar la respuesta (hasta 10 segundos)
         IB_conexion.event.wait(timeout=10)
         
         if not IB_conexion.datos:
@@ -275,151 +254,135 @@ def extraer_datos_ibkr_5m(years, IB_conexion, contrato):
                 break
             continue
         
-        # Convertir los datos recibidos a un DataFrame
         df_temp = pd.DataFrame(IB_conexion.datos)
         
-        # Si el DataFrame no está vacío y no es duplicado, lo agregamos
-        if not df_temp.empty and (len(dataframes) == 0 or df_temp["Date"].max() < dataframes[-1]["Date"].min()):
+        if not df_temp.empty:
+            df_temp["Date"] = pd.to_datetime(df_temp["Date"])
             dataframes.append(df_temp)
             print(f"📊 Datos agregados hasta: {df_temp['Date'].min()}")
         
-        # Actualizar end_date para la siguiente iteración (se usa la fecha mínima del fragmento actual)
-        end_date = pd.to_datetime(df_temp["Date"].min()).strftime("%Y%m%d %H:%M:%S")
+        end_date = df_temp["Date"].min().strftime("%Y%m%d %H:%M:%S")
+        errores_seguidos = 0
+        time.sleep(1)
+
+    if dataframes:
+        df_nuevo = pd.concat(dataframes).drop_duplicates().reset_index(drop=True)
+        df_nuevo.set_index("Date", inplace=True)
+        
+        columnas_deseadas = ["Open", "High", "Low", "Close", "Volume"]
+        df_nuevo = df_nuevo[columnas_deseadas]
+
+        # Si ya existe el archivo, fusionar datos y sobrescribir solo registros duplicados
+        if not df_existente.empty:
+            df_final = pd.concat([df_existente, df_nuevo]).drop_duplicates().sort_index()
+        else:
+            df_final = df_nuevo
+
+        df_final.to_csv(archivo_csv, index=True)
+        print(f"\n✅ Datos actualizados y guardados en {archivo_csv}")
+        print(df_final.head())
+
+        return df_final
+    else:
+        print("❌ No se descargaron datos.")
+        return None
+
+def extraer_datos_ibkr_1m(days, IB_conexion, contrato):
+    """
+    Extrae datos históricos de 1 minuto para un contrato dado usando IBKR y los guarda en CSV.
+    Si el CSV ya existe, apendiza la nueva información y elimina duplicados en base a la fecha.
+    """
+    total_iter = days   
+    end_date = ""  # Al estar vacío, IB descarga desde la fecha actual
+    dataframes = []
+    errores_seguidos = 0  # Contador de intentos fallidos
+    archivo_csv = f"{contrato.symbol}_1m.csv"
+    
+    # Si el archivo ya existe, cargar datos previos
+    if os.path.exists(archivo_csv):
+        df_existente = pd.read_csv(archivo_csv, parse_dates=["Date"], index_col="Date")
+        print(f"📂 Archivo existente encontrado: {archivo_csv} ({len(df_existente)} filas)")
+    else:
+        df_existente = pd.DataFrame()  # Crear DataFrame vacío
+    
+    # Bucle para descargar datos diarios hacia atrás
+    for i in range(total_iter):
+        print(f"\n📡 Solicitud {i+1}/{total_iter} → End Date: {end_date or 'Actual'}")
+        
+        IB_conexion.datos.clear()
+        IB_conexion.event.clear()
+        
+        IB_conexion.reqHistoricalData(
+            reqId=1,
+            contract=contrato,
+            endDateTime=end_date,
+            durationStr="1 D",
+            barSizeSetting="1 min",
+            whatToShow="TRADES",
+            useRTH=1,
+            formatDate=1,
+            keepUpToDate=False,
+            chartOptions=[]
+        )
+        
+        IB_conexion.event.wait(timeout=10)
+        
+        if not IB_conexion.datos:
+            print("⚠️ No se recibieron datos, terminando intento...")
+            errores_seguidos += 1
+            if errores_seguidos >= 5:
+                print("❌ Demasiados errores seguidos. Deteniendo el proceso.")
+                break
+            continue
+        
+        df_temp = pd.DataFrame(IB_conexion.datos)
+        
+        if not df_temp.empty:
+            df_temp["Date"] = pd.to_datetime(df_temp["Date"])
+            dataframes.append(df_temp)
+            print(f"📊 Datos agregados hasta: {df_temp['Date'].min()}")
+        
+        end_date = df_temp["Date"].min().strftime("%Y%m%d %H:%M:%S")
+        
         errores_seguidos = 0
         time.sleep(1)
     
     if dataframes:
-        # Unir todos los fragmentos y eliminar duplicados
-        df_final = pd.concat(dataframes).drop_duplicates().reset_index(drop=True)
+        df_nuevo = pd.concat(dataframes).drop_duplicates().reset_index(drop=True)
+        df_nuevo.set_index("Date", inplace=True)
         
-        # Convertir 'Date' a datetime, ordenar y establecer como índice
-        df_final['Date'] = pd.to_datetime(df_final['Date'])
-        df_final.sort_values(by='Date', inplace=True)
-        df_final.set_index('Date', inplace=True)
-        
-        # Mantener solo las columnas deseadas en el orden correcto
-        columnas_deseadas = ['Open', 'High', 'Low', 'Close', 'Volume']
-        df_final = df_final[columnas_deseadas]
-        
-        # Guardar en CSV manteniendo el índice (el índice se guarda como la columna 'Date') 
-        df_final.to_csv(f"{contrato.symbol}_5m.csv", index=True)
-        print(f"\n✅ Datos almacenados correctamente en {contrato.symbol}_5m.csv")
+        columnas_deseadas = ["Open", "High", "Low", "Close", "Volume"]
+        df_nuevo = df_nuevo[columnas_deseadas]
+
+        # Si ya existe el archivo, fusionar datos y sobrescribir solo los registros duplicados
+        if not df_existente.empty:
+            df_final = pd.concat([df_existente, df_nuevo]).drop_duplicates().sort_index()
+        else:
+            df_final = df_nuevo
+
+        # Guardar el archivo CSV actualizado
+        df_final.to_csv(archivo_csv, index=True)
+        print(f"\n✅ Datos actualizados y guardados en {archivo_csv}")
         print(df_final.head())
         
         return df_final
     else:
         print("❌ No se descargaron datos.")
         return None
-
-def extraer_datos_ibkr_1m(years, IB_conexion, contrato):
-    
-    """
-    Extrae datos históricos de 1 minuto para un contrato dado usando IBKR.
-    
-    La función realiza iteraciones diarias (1 D) para cubrir el rango total de 'years' años.
-    Cada iteración descarga datos de 1 día con barras de 1 minuto. Se utiliza la lógica de
-    actualización de la fecha final (end_date) para retroceder en el tiempo, evitando duplicados
-    y controlando errores.
-    
-    Parámetros:
-      - years (int): Número de años de datos a extraer.
-      - IB_conexion: Objeto de conexión a IB que debe tener los atributos 'datos' (lista),
-                     'event' (un threading.Event()) y el método reqHistoricalData().
-      - contrato: Objeto de contrato configurado (con atributos como symbol, secType, exchange, currency).
-    
-    Retorna:
-      - df_final (DataFrame): DataFrame con índice "Date" y columnas: Open, High, Low, Close, Volume,
-        o None si no se pudieron obtener datos.
-    """
-    total_iter = years * 365  
-    end_date = ""  # Al estar vacío, IB descarga desde la fecha actual
-    dataframes = []
-    errores_seguidos = 0  # Contador de intentos fallidos
-    
-    # Bucle para descargar datos diarios hacia atrás
-    for i in range(total_iter):
-        print(f"\n📡 Solicitud {i+1}/{total_iter} → End Date: {end_date or 'Actual'}")
-        
-        # Limpiar datos previos y resetear el evento
-        IB_conexion.datos.clear()
-        IB_conexion.event.clear()
-        
-        # Solicitar datos históricos: 1 día de datos con velas de 1 minuto
-        IB_conexion.reqHistoricalData(
-            reqId=1,
-            contract=contrato,
-            endDateTime=end_date,
-            durationStr="1 D",        # 1 día de datos
-            barSizeSetting="1 min",   # Barras de 1 minuto
-            whatToShow="TRADES",
-            useRTH=1,
-            formatDate=1,
-            keepUpToDate=False,
-            chartOptions=[]
-        )
-        
-        # Esperar la respuesta (hasta 10 segundos)
-        IB_conexion.event.wait(timeout=10)
-        
-        if not IB_conexion.datos:
-            print("⚠️ No se recibieron datos, terminando intento...")
-            errores_seguidos += 1
-            if errores_seguidos >= 3:
-                print("❌ Demasiados errores seguidos. Deteniendo el proceso.")
-                break
-            continue
-        
-        # Convertir los datos recibidos a DataFrame
-        df_temp = pd.DataFrame(IB_conexion.datos)
-        
-        # Agregar el DataFrame si no es duplicado (comparando la fecha máxima del fragmento con la del último agregado)
-        if not df_temp.empty and (len(dataframes) == 0 or df_temp["Date"].max() < dataframes[-1]["Date"].min()):
-            dataframes.append(df_temp)
-            print(f"📊 Datos agregados hasta: {df_temp['Date'].min()}")
-        
-        # Actualizar end_date para la siguiente iteración (se usa la fecha mínima del fragmento actual)
-        end_date = pd.to_datetime(df_temp["Date"].min()).strftime("%Y%m%d %H:%M:%S")
-        
-        errores_seguidos = 0
-        time.sleep(1)
-    
-    if dataframes:
-        # Unir todos los DataFrames descargados y eliminar duplicados
-        df_final = pd.concat(dataframes).drop_duplicates().reset_index(drop=True)
-        
-        # Convertir 'Date' a datetime, ordenar y establecerla como índice
-        df_final['Date'] = pd.to_datetime(df_final['Date'])
-        df_final.sort_values(by='Date', inplace=True)
-        df_final.set_index('Date', inplace=True)
-        
-        # Mantener solo las columnas deseadas en el orden correcto
-        columnas_deseadas = ['Open', 'High', 'Low', 'Close', 'Volume']
-        df_final = df_final[columnas_deseadas]
-        
-        # Guardar en CSV manteniendo el índice (el índice se guardará como "Date")
-        df_final.to_csv(f"{contrato.symbol}_1m.csv", index=True)
-        print(f"\n✅ Datos almacenados correctamente en {contrato.symbol}_1m.csv")
-        print(df_final.head())
-        
-        return df_final
-    else:
-        print("❌ No se descargaron datos.")
-        return None    
     
     
 if __name__ == "__main__":
-    # Descarga de Datos de 1 día para los últimos 10 años.
     extraer_datos_ibkr_1d(10, IB_conexion, contrato)
     df_1d = pd.read_csv(r'.\AAPL_1d.csv')
-
-    extraer_datos_ibkr_1h(10, IB_conexion, contrato)
+    
+    extraer_datos_ibkr_1h(1, IB_conexion, contrato)
     df_1h = pd.read_csv(r'.\AAPL_1h.csv')
     
-    extraer_datos_ibkr_5m(10, IB_conexion, contrato)
+    extraer_datos_ibkr_5m(1, IB_conexion, contrato)
     df_5m = pd.read_csv(r'.\AAPL_5m.csv')
     
-    extraer_datos_ibkr_1m(10, IB_conexion, contrato)
-    df_1h = pd.read_csv(r'.\AAPL_1m.csv')
+    extraer_datos_ibkr_1m(2, IB_conexion, contrato)
+    df_1m = pd.read_csv(r'.\AAPL_1m.csv')
 
     """
     Observaciones:
@@ -432,7 +395,7 @@ if __name__ == "__main__":
             * "1 sec"
             * "5 secs"
             * "15 secs"
-            * "1 min"
+            * "1 min" (solo deja extraer el último mes)
             * "2 mins"
             * "3 mins"
             * "5 mins"
@@ -447,11 +410,5 @@ if __name__ == "__main__":
         - Probar estrategias de Trading Algorítmico.
         - Superada la limitación de descarga de datos de yfinance.
         - Estudios de investigación.
-        
+        - Sobrescribir los datos nuevos a los ya existentes, en el caso que ya se tenga el archivo.
     """
-
-    
-    
-    
-    
-    
