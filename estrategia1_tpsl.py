@@ -657,50 +657,6 @@ class Estrategia7_tp_sl:
         )
         fig.show()
 
-        def plot_drawdown(self) -> None:
-            """
-            Grafica el Drawdown de la estrategia.
-            Se utiliza la serie de rendimiento acumulado (self.rendimiento_final_estrategia) para calcular el drawdown.
-            """
-
-            # Verificar que se haya calculado el rendimiento final
-            if self.rendimiento_final_estrategia is None or self.rendimiento_final_estrategia.empty:
-                raise RuntimeError("Rendimiento final no calculado. Ejecute backtest() primero.")
-
-            # Calcular la serie de retornos acumulados y el drawdown
-            cum_rets = self.rendimiento_final_estrategia.copy()
-            running_max = cum_rets.cummax()
-            drawdown = (cum_rets / running_max - 1)
-
-            # Crear el gráfico con Plotly replicando el estilo solicitado
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=drawdown.index,
-                y=drawdown * 100,
-                mode="lines",
-                line=dict(color="#930303", width=1.5),
-                fill='tozeroy',
-                fillcolor="#CE5151",
-                name="Drawdown %"
-            ))
-
-            fig.update_layout(
-                title={"text": "DRAWDOWN", "font": {"size": 15}},
-                xaxis=dict(
-                    title="Fecha",
-                    tickfont=dict(size=15, family="Arial", color="white"),
-                ),
-                yaxis=dict(
-                    title="Drawdown %",
-                    tickfont=dict(size=15, family="Arial", color="white"),
-                ),
-                template="plotly_dark",
-                width=1500,
-                height=800,
-                showlegend=False
-            )
-            fig.show()
-
     def plot_drawdown(self) -> None:
         """
         Grafica el Drawdown de la estrategia.
